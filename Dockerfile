@@ -1,4 +1,4 @@
-from python:3
+FROM python:3
 
 WORKDIR /app
 COPY ./server.py ./server.py
