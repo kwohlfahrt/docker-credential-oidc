@@ -1,13 +1,15 @@
 use std::{collections::HashMap, io, sync::Arc};
 
-use oauth2::{PkceCodeChallenge, PkceCodeVerifier};
-use reqwest::{Client, StatusCode, Url};
+use oauth2::{
+    AuthUrl, AuthorizationCode, ClientId, CsrfToken, HttpResponse, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, TokenResponse, TokenUrl,
+};
+use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::Mutex};
 
 use axum::{
     extract::{Query, State},
-    response::Redirect,
     routing::get,
     Router,
 };
@@ -93,19 +95,17 @@ impl AuthInfo {
 
 #[derive(Debug)]
 struct Auth {
-    client: Client,
-    info: AuthInfo,
-    code_challenge: (PkceCodeChallenge, PkceCodeVerifier),
+    client: oauth2::basic::BasicClient,
+    http_client: reqwest::Client,
+    pkce_verifier: PkceCodeVerifier,
+    service: String,
+    csrf_token: CsrfToken,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Callback {
     code: String,
-}
-
-#[derive(Deserialize)]
-struct Token {
-    access_token: String,
+    state: String,
 }
 
 #[derive(Serialize)]
@@ -116,60 +116,66 @@ struct Output {
 }
 
 impl Auth {
-    fn new(client: Client, info: AuthInfo) -> Self {
+    fn new(http_client: reqwest::Client, auth_info: &AuthInfo) -> Self {
+        let client = oauth2::basic::BasicClient::new(
+            ClientId::new(auth_info.service.to_owned()),
+            None,
+            AuthUrl::new(auth_info.auth_url().to_string()).unwrap(),
+            Some(TokenUrl::new(auth_info.token_url().to_string()).unwrap()),
+        )
+        .set_redirect_uri(RedirectUrl::new("http://localhost:8000/callback".to_string()).unwrap());
+
+        let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+        let (auth_url, csrf_token) = client
+            .authorize_url(CsrfToken::new_random)
+            .set_pkce_challenge(pkce_challenge)
+            .url();
+
+        webbrowser::open(&auth_url.to_string()).unwrap();
+
         return Auth {
-            client: client,
-            info: info,
-            code_challenge: PkceCodeChallenge::new_random_sha256(),
+            http_client,
+            client,
+            pkce_verifier,
+            csrf_token,
+            service: auth_info.service.to_owned(),
         };
     }
 
-    async fn start(&self) -> Redirect {
-        let redirect = format!("http://localhost:8000/callback");
+    async fn callback(self, query: Callback) -> String {
+        assert_eq!(self.csrf_token.secret(), &query.state);
 
-        let mut uri = self.info.auth_url();
-        uri.query_pairs_mut()
-            .clear()
-            .append_pair("client_id", &self.info.service)
-            .append_pair("response_type", "code")
-            .append_pair("redirect_uri", &redirect)
-            .append_pair("code_challenge_method", "S256")
-            .append_pair("code_challenge", self.code_challenge.0.as_str());
-
-        Redirect::to(&uri.to_string())
-    }
-
-    async fn callback(&self, query: &Callback) -> String {
-        let uri = self.info.token_url();
-        let redirect = format!("http://localhost:8000/callback");
-
-        let params: Vec<(&str, &str)> = vec![
-            ("client_id", &self.info.service),
-            ("code", &query.code),
-            ("code_verifier", self.code_challenge.1.secret()),
-            ("grant_type", "authorization_code"),
-            ("redirect_uri", &redirect),
-        ];
-
-        let resp: Token = self
+        let token = self
             .client
-            .post(uri)
-            .form(&params)
-            .send()
-            .await
-            .unwrap()
-            .json()
+            .exchange_code(AuthorizationCode::new(query.code))
+            .set_pkce_verifier(self.pkce_verifier)
+            .request_async(|r| async {
+                let resp = self
+                    .http_client
+                    .request(r.method, r.url)
+                    .headers(r.headers)
+                    .body(r.body)
+                    .send()
+                    .await?;
+
+                Ok::<_, reqwest::Error>(HttpResponse {
+                    status_code: resp.status(),
+                    headers: resp.headers().to_owned(),
+                    body: resp.bytes().await?.to_vec(),
+                })
+            })
             .await
             .unwrap();
 
         println!(
             "{{\"ServerURL\": \"{}\", \"Username\": \"OIDC\", \"Secret\": \"{}\" }}",
-            self.info.service, resp.access_token
+            self.service,
+            token.access_token().secret(),
         );
 
         format!(
             "Successfully authenticated to {}! You may close this window.",
-            self.info.service
+            self.service
         )
     }
 }
@@ -184,27 +190,23 @@ async fn main() {
             io::stdin().read_line(&mut registry).unwrap();
             let registry = registry.trim();
 
-            let client = reqwest::Client::new();
-            let auth_info = AuthInfo::for_registry(&client, registry).await;
+            let http_client = reqwest::Client::new();
+            let auth_info = AuthInfo::for_registry(&http_client, registry).await;
+            let auth = Auth::new(http_client, &auth_info);
 
             let app = Router::new()
                 .route(
-                    "/start",
-                    get(move |State(state): State<Arc<Auth>>| async move {
-                        state.as_ref().start().await
-                    }),
-                )
-                .route(
                     "/callback",
                     get(
-                        move |State(state): State<Arc<Auth>>, query: Query<Callback>| async move {
-                            state.as_ref().callback(&query).await
+                        move |State(state): State<Arc<Mutex<Option<Auth>>>>,
+                              Query(query): Query<Callback>| async move {
+                            let auth = state.lock().await.take().unwrap();
+                            auth.callback(query).await
                         },
                     ),
                 )
-                .with_state(Arc::new(Auth::new(client, auth_info)));
-            let listener = TcpListener::bind("0.0.0.0:8000").await.unwrap();
-
+                .with_state(Arc::new(Mutex::new(Some(auth))));
+            let listener = TcpListener::bind("localhost:8000").await.unwrap();
             axum::serve(listener, app)
         }
     }
