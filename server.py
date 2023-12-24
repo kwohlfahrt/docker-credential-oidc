@@ -16,10 +16,6 @@ from urllib.request import urlopen
 
 ssl_ctx = ssl.create_default_context()
 
-# FIXME: This is for testing, remove
-ssl_ctx.check_hostname = False
-ssl_ctx.verify_mode = ssl.CERT_NONE
-
 
 def parse_prefix(s, prefix):
     if not s.startswith(prefix):
