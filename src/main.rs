@@ -109,10 +109,13 @@ struct Callback {
 }
 
 #[derive(Serialize)]
-struct Output {
-    server_url: String,
-    username: String,
-    secret: String,
+struct Output<'a> {
+    #[serde(rename = "ServerURL")]
+    server_url: &'a str,
+    #[serde(rename = "Username")]
+    username: &'a str,
+    #[serde(rename = "Secret")]
+    secret: &'a str,
 }
 
 impl Auth {
@@ -166,9 +169,13 @@ impl Auth {
             .unwrap();
 
         println!(
-            "{{\"ServerURL\": \"{}\", \"Username\": \"OIDC\", \"Secret\": \"{}\" }}",
-            self.service,
-            token.access_token().secret(),
+            "{}",
+            serde_json::to_string(&Output {
+                server_url: &self.service,
+                username: "OIDC",
+                secret: token.access_token().secret(),
+            })
+            .unwrap()
         );
 
         format!(
