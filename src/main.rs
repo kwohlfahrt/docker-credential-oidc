@@ -1,4 +1,7 @@
-use std::{collections::HashMap, io, sync::Arc};
+use std::{
+    collections::HashMap,
+    io::{self, Error},
+};
 
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, HttpResponse, PkceCodeChallenge,
@@ -6,14 +9,9 @@ use oauth2::{
 };
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, Serialize};
-use tokio::{net::TcpListener, sync::Mutex};
 
-use axum::{
-    extract::{Query, State},
-    routing::get,
-    Router,
-};
 use clap::{Parser, Subcommand};
+use tiny_http::{Method, Response};
 
 #[derive(Parser)]
 struct Args {
@@ -39,11 +37,10 @@ struct OpenIdConfiguration {
 }
 
 impl AuthInfo {
-    async fn for_registry(client: &reqwest::Client, registry: &str) -> Self {
+    fn for_registry(client: &reqwest::blocking::Client, registry: &str) -> Self {
         let resp = client
             .get(format!("https://{}/v2/", registry))
             .send()
-            .await
             .unwrap();
 
         let auth = match resp.status() {
@@ -64,7 +61,7 @@ impl AuthInfo {
             .collect::<HashMap<_, _>>();
 
         let realm = challenges.get("realm").unwrap().to_string();
-        let openid_configuration = Self::openid_configuration(&client, &realm).await;
+        let openid_configuration = Self::openid_configuration(&client, &realm);
 
         AuthInfo {
             service: challenges.get("service").unwrap().to_string(),
@@ -72,7 +69,10 @@ impl AuthInfo {
         }
     }
 
-    async fn openid_configuration(client: &reqwest::Client, realm: &str) -> OpenIdConfiguration {
+    fn openid_configuration(
+        client: &reqwest::blocking::Client,
+        realm: &str,
+    ) -> OpenIdConfiguration {
         let (path, _) = realm.rsplit_once('/').unwrap();
         let mut url = Url::parse(path).unwrap();
         url.set_path(&format!(
@@ -80,7 +80,7 @@ impl AuthInfo {
             url.path(),
             ".well-known/openid-configuration"
         ));
-        client.get(url).send().await.unwrap().json().await.unwrap()
+        client.get(url).send().unwrap().json().unwrap()
     }
 
     fn auth_url(&self) -> Url {
@@ -96,7 +96,7 @@ impl AuthInfo {
 #[derive(Debug)]
 struct Auth {
     client: oauth2::basic::BasicClient,
-    http_client: reqwest::Client,
+    http_client: reqwest::blocking::Client,
     pkce_verifier: PkceCodeVerifier,
     service: String,
     csrf_token: CsrfToken,
@@ -116,7 +116,7 @@ struct Output {
 }
 
 impl Auth {
-    fn new(http_client: reqwest::Client, auth_info: &AuthInfo) -> Self {
+    fn new(http_client: reqwest::blocking::Client, auth_info: &AuthInfo) -> Self {
         let client = oauth2::basic::BasicClient::new(
             ClientId::new(auth_info.service.to_owned()),
             None,
@@ -142,29 +142,27 @@ impl Auth {
         };
     }
 
-    async fn callback(self, query: Callback) -> String {
+    fn callback(self, query: Callback) -> String {
         assert_eq!(self.csrf_token.secret(), &query.state);
 
         let token = self
             .client
             .exchange_code(AuthorizationCode::new(query.code))
             .set_pkce_verifier(self.pkce_verifier)
-            .request_async(|r| async {
+            .request(|r| {
                 let resp = self
                     .http_client
                     .request(r.method, r.url)
                     .headers(r.headers)
                     .body(r.body)
-                    .send()
-                    .await?;
+                    .send()?;
 
                 Ok::<_, reqwest::Error>(HttpResponse {
                     status_code: resp.status(),
                     headers: resp.headers().to_owned(),
-                    body: resp.bytes().await?.to_vec(),
+                    body: resp.bytes()?.to_vec(),
                 })
             })
-            .await
             .unwrap();
 
         println!(
@@ -180,8 +178,7 @@ impl Auth {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
+fn main() -> Result<(), Error> {
     let args = Args::parse();
 
     match args.command {
@@ -190,26 +187,29 @@ async fn main() {
             io::stdin().read_line(&mut registry).unwrap();
             let registry = registry.trim();
 
-            let http_client = reqwest::Client::new();
-            let auth_info = AuthInfo::for_registry(&http_client, registry).await;
+            let http_client = reqwest::blocking::Client::new();
+            let auth_info = AuthInfo::for_registry(&http_client, registry);
             let auth = Auth::new(http_client, &auth_info);
 
-            let app = Router::new()
-                .route(
-                    "/callback",
-                    get(
-                        move |State(state): State<Arc<Mutex<Option<Auth>>>>,
-                              Query(query): Query<Callback>| async move {
-                            let auth = state.lock().await.take().unwrap();
-                            auth.callback(query).await
-                        },
-                    ),
-                )
-                .with_state(Arc::new(Mutex::new(Some(auth))));
-            let listener = TcpListener::bind("localhost:8000").await.unwrap();
-            axum::serve(listener, app)
+            let server = tiny_http::Server::http("localhost:8000").unwrap();
+            let request = server.recv()?;
+
+            assert_eq!(request.method(), &Method::Get);
+            let url = Url::parse("http://localhost:8000")
+                .unwrap()
+                .join(request.url())
+                .unwrap();
+            assert_eq!(url.path(), "/callback");
+
+            let query = url.query_pairs().collect::<HashMap<_, _>>();
+
+            let response = auth.callback(Callback {
+                code: query.get("code").unwrap().to_string(),
+                state: query.get("state").unwrap().to_string(),
+            });
+
+            request.respond(Response::from_string(response)).unwrap();
         }
     }
-    .await
-    .unwrap()
+    Ok(())
 }
