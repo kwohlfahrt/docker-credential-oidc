@@ -13,14 +13,6 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: cache system packages
-        uses: actions/cache@v3
-        with:
-          path: |
-            /var/cache/apt
-            /var/lib/apt
-          key: ${{ runner.os }}-apt
-
       - name: install system packages
         run: |
           sudo dpkg --add-architecture arm64
