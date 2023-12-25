@@ -1,0 +1,179 @@
+on:
+  pull_request: ~
+  push:
+    tags: "v*"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: install system packages
+        run: |
+          sudo dpkg --add-architecture arm64
+
+          cat <<EOF | sudo tee /etc/apt/sources.list
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy main restricted
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main restricted
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-backports main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security multiverse
+
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy main restricted
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy universe
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-updates universe
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-updates multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu/ jammy-security main restricted
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu/ jammy-security universe
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu/ jammy-security multiverse
+          EOF
+
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu pkg-config libssl-dev libssl-dev:arm64
+          sudo ln -s /usr/lib/aarch64-linux-gnu/libgcc_s.so.1 /usr/lib/aarch64-linux-gnu/libgcc_s.so
+
+      - name: cache rustup
+        uses: actions/cache@v3
+        with:
+          path: ~/.rustup
+          key: ${{ runner.os }}-rustup
+
+      - name: install rustup
+        run: rustup toolchain install stable --target=x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+      - uses: actions/checkout@v3
+      - name: cache build
+        uses: actions/cache@v3
+        with:
+          path: |
+            ./target
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: build
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu
+          PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu PKG_CONFIG_DIR=/usr/aarch64-linux-gnu/lib/pkgconfig \
+            cargo build --release --target aarch64-unknown-linux-gnu --config target.aarch64-unknown-linux-gnu.linker=\"aarch64-linux-gnu-ld\"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-credential-oidc-${{ runner.os }}
+          path: ./target/*/release/docker-credential-oidc
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - name: cache rustup
+        uses: actions/cache@v3
+        with:
+          path: ~/.rustup"
+          key: ${{ runner.os }}-rustup
+
+      - name: install rustup
+        run: rustup toolchain install stable --target x86_64-pc-windows-msvc
+
+      - uses: actions/checkout@v3
+
+      - name: cache build
+        uses: actions/cache@v3
+        with:
+          path: |
+            ./target
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-credential-oidc-${{ runner.os }}
+          path: ./target/*/release/docker-credential-oidc.exe
+
+  macos:
+    runs-on: macos-12
+    steps:
+      - name: cache rustup
+        uses: actions/cache@v3
+        with:
+          path: ~/.rustup"
+          key: ${{ runner.os }}-rustup
+
+      - name: install rustup
+        run: rustup toolchain install stable --target=x86_64-apple-darwin,aarch64-apple-darwin
+
+      - uses: actions/checkout@v3
+
+      - name: cache build
+        uses: actions/cache@v3
+        with:
+          path: |
+            ./target
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: build
+        run: |
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-credential-oidc-${{ runner.os }}
+          path: ./target/*/release/docker-credential-oidc
+
+  release:
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: rename files
+        run: |
+          mkdir -p files/
+          cp aarch64-unknown-linux-gnu/release/docker-credential-oidc files/docker-credential-oidc.linux.arm64
+          cp x86_64-unknown-linux-gnu/release/docker-credential-oidc files/docker-credential-oidc.linux.amd64
+          cp aarch64-apple-darwin/release/docker-credential-oidc files/docker-credential-oidc.macos.arm64
+          cp x86_64-apple-darwin/release/docker-credential-oidc files/docker-credential-oidc.macos.amd64
+          cp x86_64-pc-windows-msvc/release/docker-credential-oidc.exe files/docker-credential-oidc.windows.amd64
+
+      - uses: softprops/action-gh-release@v1
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        with:
+          files: |
+            ./files/*
