@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, CsrfToken, HttpResponse, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, TokenResponse, TokenUrl,
+    AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
+    TokenResponse,
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,6 @@ enum Command {
 #[derive(Debug)]
 struct Auth {
     client: oauth2::basic::BasicClient,
-    http_client: reqwest::blocking::Client,
     pkce_verifier: PkceCodeVerifier,
     service: String,
     csrf_token: CsrfToken,
@@ -50,12 +49,12 @@ struct Output<'a> {
 }
 
 impl Auth {
-    fn new(http_client: reqwest::blocking::Client, auth_info: &AuthInfo) -> Self {
+    fn new(auth_info: &AuthInfo) -> Self {
         let client = oauth2::basic::BasicClient::new(
             ClientId::new(auth_info.service.to_owned()),
             None,
-            AuthUrl::new(auth_info.auth_url().to_string()).unwrap(),
-            Some(TokenUrl::new(auth_info.token_url().to_string()).unwrap()),
+            auth_info.auth_url(),
+            Some(auth_info.token_url()),
         )
         .set_redirect_uri(RedirectUrl::new("http://localhost:8000/callback".to_string()).unwrap());
 
@@ -68,7 +67,6 @@ impl Auth {
         webbrowser::open(&auth_url.to_string()).unwrap();
 
         return Auth {
-            http_client,
             client,
             pkce_verifier,
             csrf_token,
@@ -83,20 +81,7 @@ impl Auth {
             .client
             .exchange_code(AuthorizationCode::new(query.code))
             .set_pkce_verifier(self.pkce_verifier)
-            .request(|r| {
-                let resp = self
-                    .http_client
-                    .request(r.method, r.url)
-                    .headers(r.headers)
-                    .body(r.body)
-                    .send()?;
-
-                Ok::<_, reqwest::Error>(HttpResponse {
-                    status_code: resp.status(),
-                    headers: resp.headers().to_owned(),
-                    body: resp.bytes()?.to_vec(),
-                })
-            })
+            .request(oauth2::reqwest::http_client)
             .unwrap();
 
         println!(
@@ -127,7 +112,7 @@ fn main() -> Result<(), Error> {
 
             let http_client = reqwest::blocking::Client::new();
             let auth_info = AuthInfo::for_registry(&http_client, registry);
-            let auth = Auth::new(http_client, &auth_info);
+            let auth = Auth::new(&auth_info);
 
             let server = tiny_http::Server::http("localhost:8000").unwrap();
             let request = server.recv()?;

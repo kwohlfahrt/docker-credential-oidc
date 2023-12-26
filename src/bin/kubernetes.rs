@@ -4,6 +4,9 @@ use std::{
     io::{self, Error},
 };
 
+use clap::Parser;
+use oauth2::{AccessToken, ClientId, ClientSecret, TokenResponse};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use docker_credential_oidc::AuthInfo;
@@ -46,29 +49,48 @@ struct CredentialProviderResponse {
     auth: Option<HashMap<String, AuthConfig>>,
 }
 
-const ENV_VAR_NAME: &str = "KUBERNETES_CREDENTIAL_OIDC_SECRET";
+fn auth(client_id: ClientId, auth_info: &AuthInfo) -> AccessToken {
+    const SECRET_ENV_VAR: &str = "OIDC_CLIENT_SECRET";
+    let secret =
+        env::var(SECRET_ENV_VAR).expect(&format!("environment variable {}", SECRET_ENV_VAR));
+
+    let client = oauth2::basic::BasicClient::new(
+        client_id,
+        Some(ClientSecret::new(secret)),
+        auth_info.auth_url(),
+        Some(auth_info.token_url()),
+    );
+
+    let access = client
+        .exchange_client_credentials()
+        .request(oauth2::reqwest::http_client)
+        .unwrap();
+
+    access.access_token().to_owned()
+}
+
+#[derive(Parser)]
+struct Args {
+    client_id: String,
+}
 
 fn main() -> Result<(), Error> {
+    let args = Args::parse();
     let request: CredentialProviderRequest = serde_json::from_reader(io::stdin())?;
     let http_client = reqwest::blocking::Client::new();
     let auth_info = AuthInfo::for_image(&http_client, &request.image);
 
-    let secret = env::var(ENV_VAR_NAME).expect(&format!("environment variable {}", ENV_VAR_NAME));
-
-    let auth = [(
-        auth_info.service,
-        AuthConfig {
-            username: "OIDC".to_owned(),
-            password: "abcd".to_owned(),
-        },
-    )]
-    .into_iter()
-    .collect();
-
+    let token = auth(ClientId::new(args.client_id), &auth_info);
     let output = CredentialProviderResponse {
         api_version: ApiVersion::V1,
         cache_key_type: CacheKeyType::Registry,
-        auth: Some(auth),
+        auth: Some(HashMap::from([(
+            auth_info.service,
+            AuthConfig {
+                username: "OIDC".to_owned(),
+                password: token.secret().to_string(),
+            },
+        )])),
     };
 
     serde_json::to_writer(io::stdout(), &output)?;

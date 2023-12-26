@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use oauth2::{AuthUrl, TokenUrl};
 use reqwest::{StatusCode, Url};
 use serde::Deserialize;
 
@@ -70,12 +71,12 @@ impl AuthInfo {
         client.get(url).send().unwrap().json().unwrap()
     }
 
-    pub fn auth_url(&self) -> Url {
-        Url::parse(&self.openid_configuration.authorization_endpoint).unwrap()
+    pub fn auth_url(&self) -> AuthUrl {
+        AuthUrl::new(self.openid_configuration.authorization_endpoint.clone()).unwrap()
     }
 
-    pub fn token_url(&self) -> Url {
+    pub fn token_url(&self) -> TokenUrl {
         // TODO: Cache openid_configuration
-        Url::parse(&self.openid_configuration.token_endpoint).unwrap()
+        TokenUrl::new(self.openid_configuration.token_endpoint.clone()).unwrap()
     }
 }
