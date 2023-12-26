@@ -1,17 +1,17 @@
-use std::{
-    collections::HashMap,
-    io::{self, Error},
-};
-
+use clap::{Parser, Subcommand};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, HttpResponse, PkceCodeChallenge,
     PkceCodeVerifier, RedirectUrl, TokenResponse, TokenUrl,
 };
-use reqwest::{StatusCode, Url};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
-
-use clap::{Parser, Subcommand};
+use std::{
+    collections::HashMap,
+    io::{self, Error},
+};
 use tiny_http::{Method, Response};
+
+use docker_credential_oidc::AuthInfo;
 
 #[derive(Parser)]
 struct Args {
@@ -22,75 +22,6 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     Get {},
-}
-
-#[derive(Debug)]
-struct AuthInfo {
-    service: String,
-    openid_configuration: OpenIdConfiguration,
-}
-
-#[derive(Deserialize, Debug)]
-struct OpenIdConfiguration {
-    authorization_endpoint: String,
-    token_endpoint: String,
-}
-
-impl AuthInfo {
-    fn for_registry(client: &reqwest::blocking::Client, registry: &str) -> Self {
-        let resp = client
-            .get(format!("https://{}/v2/", registry))
-            .send()
-            .unwrap();
-
-        let auth = match resp.status() {
-            StatusCode::UNAUTHORIZED => resp.headers().get("www-authenticate").unwrap(),
-            _ => panic!("Expected 401 response, got {}", resp.status()),
-        };
-
-        let challenges = auth
-            .to_str()
-            .unwrap()
-            .strip_prefix("Bearer ")
-            .unwrap()
-            .split(",")
-            .map(|c| {
-                let (k, v) = c.split_once("=").unwrap();
-                (k, v.trim_matches('"'))
-            })
-            .collect::<HashMap<_, _>>();
-
-        let realm = challenges.get("realm").unwrap().to_string();
-        let openid_configuration = Self::openid_configuration(&client, &realm);
-
-        AuthInfo {
-            service: challenges.get("service").unwrap().to_string(),
-            openid_configuration: openid_configuration,
-        }
-    }
-
-    fn openid_configuration(
-        client: &reqwest::blocking::Client,
-        realm: &str,
-    ) -> OpenIdConfiguration {
-        let (path, _) = realm.rsplit_once('/').unwrap();
-        let mut url = Url::parse(path).unwrap();
-        url.set_path(&format!(
-            "{}/{}",
-            url.path(),
-            ".well-known/openid-configuration"
-        ));
-        client.get(url).send().unwrap().json().unwrap()
-    }
-
-    fn auth_url(&self) -> Url {
-        Url::parse(&self.openid_configuration.authorization_endpoint).unwrap()
-    }
-
-    fn token_url(&self) -> Url {
-        // TODO: Cache openid_configuration
-        Url::parse(&self.openid_configuration.token_endpoint).unwrap()
-    }
 }
 
 #[derive(Debug)]
