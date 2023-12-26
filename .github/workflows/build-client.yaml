@@ -77,7 +77,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: docker-credential-oidc-${{ runner.os }}
-          path: ./target/*/release/docker-credential-oidc
+          path: |
+            ./target/*/release/docker-credential-oidc
+            ./target/*/release/oidc-credential-provider
 
   windows:
     runs-on: windows-2022
@@ -114,7 +116,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: docker-credential-oidc-${{ runner.os }}
-          path: ./target/*/release/docker-credential-oidc.exe
+          path: |
+            ./target/*/release/docker-credential-oidc.exe
+            ./target/*/release/oidc-credential-provider.exe
 
   macos:
     runs-on: macos-12
@@ -147,8 +151,8 @@ jobs:
 
       - name: build
         run: |
-          cargo build --release --target x86_64-apple-darwin
-          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin --bin docker-credential-oidc
+          cargo build --release --target aarch64-apple-darwin --bin docker-credential-oidc
 
       - uses: actions/upload-artifact@v4
         with:
@@ -170,9 +174,14 @@ jobs:
           mkdir -p files/
           cp aarch64-unknown-linux-gnu/release/docker-credential-oidc files/docker-credential-oidc.linux.arm64
           cp x86_64-unknown-linux-gnu/release/docker-credential-oidc files/docker-credential-oidc.linux.amd64
+          cp aarch64-unknown-linux-gnu/release/docker-credential-oidc files/oidc-credential-provider.linux.arm64
+          cp x86_64-unknown-linux-gnu/release/docker-credential-oidc files/oidc-credential-provider.linux.amd64
+
           cp aarch64-apple-darwin/release/docker-credential-oidc files/docker-credential-oidc.macos.arm64
           cp x86_64-apple-darwin/release/docker-credential-oidc files/docker-credential-oidc.macos.amd64
+
           cp x86_64-pc-windows-msvc/release/docker-credential-oidc.exe files/docker-credential-oidc.windows.amd64
+          cp x86_64-pc-windows-msvc/release/docker-credential-oidc.exe files/oidc-credential-provider.windows.amd64
 
       - uses: softprops/action-gh-release@v1
         if: ${{ startsWith(github.ref, 'refs/tags/') }}

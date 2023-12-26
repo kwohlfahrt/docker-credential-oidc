@@ -15,4 +15,4 @@ tiny_http = "0.12.0"
 webbrowser = "0.8.12"
 
 [[bin]]
-name = "kubernetes"
+name = "oidc-credential-provider"

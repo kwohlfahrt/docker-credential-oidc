@@ -6,7 +6,6 @@ use std::{
 
 use clap::Parser;
 use oauth2::{AccessToken, ClientId, ClientSecret, TokenResponse};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use docker_credential_oidc::AuthInfo;
