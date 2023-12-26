@@ -44,8 +44,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             authorization = parse_prefix(self.headers["authorization"], "Basic ")
             _, token = b64decode(authorization).decode().split(":")
-            with io.TextIOWrapper(self.wfile) as f:
-                json.dump({"access_token": token}, f)
+
+            f = io.TextIOWrapper(self.wfile)
+            json.dump({"access_token": token}, f)
+            f.detach()  # The HTTP server closes the file, so we must not
 
 
 def main(argv=None):
