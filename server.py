@@ -10,7 +10,7 @@ from threading import Thread
 from argparse import ArgumentParser
 from functools import cached_property
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, parse_qs
 from urllib.request import urlopen
 
 
@@ -30,6 +30,11 @@ class Server(HTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _write(self, data):
+        f = io.TextIOWrapper(self.wfile)
+        json.dump(data, f)
+        f.detach()  # The HTTP server closes the file, so we must not
+
     def do_GET(self):
         path = urlparse(self.path)
         if path.path == "/auth/.well-known/openid-configuration":
@@ -45,9 +50,17 @@ class Handler(BaseHTTPRequestHandler):
             authorization = parse_prefix(self.headers["authorization"], "Basic ")
             _, token = b64decode(authorization).decode().split(":")
 
-            f = io.TextIOWrapper(self.wfile)
-            json.dump({"access_token": token}, f)
-            f.detach()  # The HTTP server closes the file, so we must not
+            self._write({"access_token": token})
+
+    def do_POST(self):
+        self.send_response(200)
+        self.end_headers()
+        body = self.rfile.read(int(self.headers['content-length'])).decode()
+        query = parse_qs(body)
+
+        [token] = query["password"]
+        [scope] = query["scope"]
+        self._write({"access_token": token, "scope": scope, "expires_in": 60})
 
 
 def main(argv=None):
