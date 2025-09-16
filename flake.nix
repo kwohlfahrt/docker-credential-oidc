@@ -12,13 +12,10 @@
     systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
     forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
 
-    docker-credential-oidc = { naersk, lib, openssl, pkg-config, targetPlatform, darwin ? null }:
-    let
-      darwinPackages = with darwin.apple_sdk.frameworks; [ SystemConfiguration ];
-    in naersk.lib."${targetPlatform.system}".buildPackage rec {
+    docker-credential-oidc = { naersk, lib, openssl, pkg-config, targetPlatform }: naersk.lib."${targetPlatform.system}".buildPackage rec {
       pname = "docker-credential-oidc";
       root = ./.;
-      buildInputs = [ openssl ] ++ (if (darwin != null) then darwinPackages else []);
+      buildInputs = [ openssl ];
       nativeBuildInputs = [ pkg-config ];
 
       meta = with lib; {
