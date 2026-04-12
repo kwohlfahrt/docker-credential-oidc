@@ -4,6 +4,8 @@ use oauth2::{AuthUrl, TokenUrl};
 use reqwest::{StatusCode, Url};
 use serde::Deserialize;
 
+pub mod pattern;
+
 #[derive(Debug)]
 pub struct AuthInfo {
     pub service: String,
