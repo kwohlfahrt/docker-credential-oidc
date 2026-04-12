@@ -46,6 +46,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - run: cargo test
       - name: build
         run: |
           IFS=, read -ra TGTS <<< "$TARGETS"
