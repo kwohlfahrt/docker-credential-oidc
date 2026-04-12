@@ -96,3 +96,15 @@ fn main() -> Result<(), Error> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse_args() {
+        let args =
+            Args::try_parse_from(vec!["oidc-credential-provider", "foo.example.com"]).unwrap();
+        assert_eq!(args.client_id, "foo.example.com")
+    }
+}
