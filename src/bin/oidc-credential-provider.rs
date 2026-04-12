@@ -8,7 +8,7 @@ use clap::Parser;
 use oauth2::{AccessToken, ClientId, ClientSecret, TokenResponse};
 use serde::{Deserialize, Serialize};
 
-use docker_credential_oidc::{pattern, AuthInfo};
+use docker_credential_oidc::{AuthInfo, pattern};
 use url::Url;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -51,19 +51,22 @@ struct CredentialProviderResponse {
 
 fn auth(client_id: ClientId, auth_info: &AuthInfo) -> AccessToken {
     const SECRET_ENV_VAR: &str = "OIDC_CLIENT_SECRET";
-    let secret =
-        env::var(SECRET_ENV_VAR).expect(&format!("environment variable {}", SECRET_ENV_VAR));
+    let secret = env::var(SECRET_ENV_VAR)
+        .unwrap_or_else(|_| panic!("missing environment variable {}", SECRET_ENV_VAR));
 
-    let client = oauth2::basic::BasicClient::new(
-        client_id,
-        Some(ClientSecret::new(secret)),
-        auth_info.auth_url(),
-        Some(auth_info.token_url()),
-    );
+    let client = oauth2::basic::BasicClient::new(client_id)
+        .set_client_secret(ClientSecret::new(secret))
+        .set_auth_uri(auth_info.auth_url())
+        .set_token_uri(auth_info.token_url());
+
+    let http_client = oauth2::reqwest::blocking::ClientBuilder::new()
+        .redirect(oauth2::reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
 
     let access = client
         .exchange_client_credentials()
-        .request(oauth2::reqwest::http_client)
+        .request(&http_client)
         .unwrap();
 
     access.access_token().to_owned()

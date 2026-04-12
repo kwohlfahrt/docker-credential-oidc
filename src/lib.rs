@@ -51,11 +51,11 @@ impl AuthInfo {
             .collect::<HashMap<_, _>>();
 
         let realm = challenges.get("realm").unwrap().to_string();
-        let openid_configuration = Self::openid_configuration(&client, &realm);
+        let openid_configuration = Self::openid_configuration(client, &realm);
 
         AuthInfo {
             service: challenges.get("service").unwrap().to_string(),
-            openid_configuration: openid_configuration,
+            openid_configuration,
         }
     }
 

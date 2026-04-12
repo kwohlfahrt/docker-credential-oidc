@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use oauth2::{
-    AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
-    TokenResponse,
+    AuthorizationCode, ClientId, CsrfToken, EndpointNotSet, EndpointSet, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, TokenResponse,
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,13 @@ enum Command {
 
 #[derive(Debug)]
 struct Auth {
-    client: oauth2::basic::BasicClient,
+    client: oauth2::basic::BasicClient<
+        EndpointSet,    // HasAuthUrl
+        EndpointNotSet, // HasDeviceAuthUrl
+        EndpointNotSet, // HasIntrospectionUrl
+        EndpointNotSet, // HasRevocationUrl
+        EndpointSet,    // HasTokenUrl
+    >,
     pkce_verifier: PkceCodeVerifier,
     service: String,
     csrf_token: CsrfToken,
@@ -50,13 +56,12 @@ struct Output<'a> {
 
 impl Auth {
     fn new(auth_info: &AuthInfo) -> Self {
-        let client = oauth2::basic::BasicClient::new(
-            ClientId::new(auth_info.service.to_owned()),
-            None,
-            auth_info.auth_url(),
-            Some(auth_info.token_url()),
-        )
-        .set_redirect_uri(RedirectUrl::new("http://localhost:8000/callback".to_string()).unwrap());
+        let client = oauth2::basic::BasicClient::new(ClientId::new(auth_info.service.to_owned()))
+            .set_redirect_uri(
+                RedirectUrl::new("http://localhost:8000/callback".to_string()).unwrap(),
+            )
+            .set_auth_uri(auth_info.auth_url())
+            .set_token_uri(auth_info.token_url());
 
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
         let (auth_url, csrf_token) = client
@@ -64,24 +69,29 @@ impl Auth {
             .set_pkce_challenge(pkce_challenge)
             .url();
 
-        webbrowser::open(&auth_url.to_string()).unwrap();
+        webbrowser::open(auth_url.as_ref()).unwrap();
 
-        return Auth {
+        Auth {
             client,
             pkce_verifier,
             csrf_token,
             service: auth_info.service.to_owned(),
-        };
+        }
     }
 
     fn callback(self, query: Callback) -> String {
         assert_eq!(self.csrf_token.secret(), &query.state);
 
+        let http_client = oauth2::reqwest::blocking::ClientBuilder::new()
+            .redirect(oauth2::reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+
         let token = self
             .client
             .exchange_code(AuthorizationCode::new(query.code))
             .set_pkce_verifier(self.pkce_verifier)
-            .request(oauth2::reqwest::http_client)
+            .request(&http_client)
             .unwrap();
 
         println!(
