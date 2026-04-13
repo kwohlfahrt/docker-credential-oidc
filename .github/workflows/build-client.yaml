@@ -63,11 +63,20 @@ jobs:
           done
 
       - uses: actions/upload-artifact@v4
+        if: matrix.os != 'windows'
         with:
           name: docker-credential-oidc-${{ runner.os }}
           path: |
             ./target/*/release/docker-credential-oidc
             ./target/*/release/oidc-credential-provider
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows'
+        with:
+          name: docker-credential-oidc-${{ runner.os }}
+          path: |
+            ./target/*/release/docker-credential-oidc.exe
+            ./target/*/release/oidc-credential-provider.exe
 
   release:
     needs: [build]
