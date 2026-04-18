@@ -8,8 +8,7 @@ use clap::Parser;
 use oauth2::{AccessToken, ClientId, ClientSecret, TokenResponse};
 use serde::{Deserialize, Serialize};
 
-use docker_credential_oidc::{AuthInfo, pattern};
-use url::Url;
+use docker_credential_oidc::AuthInfo;
 
 #[derive(Serialize, Deserialize, Debug)]
 enum ApiVersion {
@@ -74,106 +73,41 @@ fn auth(client_id: ClientId, auth_info: &AuthInfo) -> AccessToken {
 
 #[derive(Parser)]
 struct Args {
-    #[arg(num_args=0..)]
-    clients: Vec<ClientRegistries>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-struct ClientRegistries {
-    client: ClientId,
-    registries: Vec<pattern::Pattern>,
-}
-
-impl ClientRegistries {
-    fn matches(&self, image: &Url) -> bool {
-        self.registries.iter().any(|p| p.matches(image))
-    }
-}
-
-impl std::str::FromStr for ClientRegistries {
-    type Err = pattern::ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (client, registries) = s.split_once(':').unwrap_or((s, ""));
-        let registries = registries
-            .split(',')
-            .map(pattern::Pattern::from_str)
-            .collect::<Result<_, _>>()?;
-        Ok(Self {
-            client: ClientId::new(client.to_owned()),
-            registries,
-        })
-    }
-}
-
-fn get_credentials(
-    client: ClientId,
-    request: &CredentialProviderRequest,
-) -> HashMap<String, AuthConfig> {
-    let http_client = reqwest::blocking::Client::new();
-    let auth_info = AuthInfo::for_image(&http_client, &request.image);
-
-    let token = auth(client, &auth_info);
-    HashMap::from([(
-        auth_info.service,
-        AuthConfig {
-            username: "OIDC".to_owned(),
-            password: token.secret().to_string(),
-        },
-    )])
+    client_id: String,
 }
 
 fn main() -> Result<(), Error> {
     let args = Args::parse();
     let request: CredentialProviderRequest = serde_json::from_reader(io::stdin())?;
-    let url = Url::parse(&format!("https://{}", request.image));
-    let auth = args
-        .clients
-        .into_iter()
-        .find(|c| url.as_ref().is_ok_and(|u| c.matches(u)))
-        .map(|client| get_credentials(client.client, &request));
+    let http_client = reqwest::blocking::Client::new();
+    let auth_info = AuthInfo::for_image(&http_client, &request.image);
 
-    serde_json::to_writer(
-        io::stdout(),
-        &CredentialProviderResponse {
-            api_version: ApiVersion::V1,
-            cache_key_type: CacheKeyType::Registry,
-            auth,
-        },
-    )?;
+    let token = auth(ClientId::new(args.client_id), &auth_info);
+    let output = CredentialProviderResponse {
+        api_version: ApiVersion::V1,
+        cache_key_type: CacheKeyType::Registry,
+        auth: Some(HashMap::from([(
+            auth_info.service,
+            AuthConfig {
+                username: "OIDC".to_owned(),
+                password: token.secret().to_string(),
+            },
+        )])),
+    };
+
+    serde_json::to_writer(io::stdout(), &output)?;
 
     Ok(())
 }
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
-
     use super::*;
 
     #[test]
     fn test_parse_args() {
-        let args = Args::try_parse_from(vec![
-            "oidc-credential-provider",
-            "foo@example.com:foo.example.com,*.foo.example.com",
-            "bar@example.com:registry.bar.example.com",
-        ])
-        .unwrap();
-
-        let expected = vec![
-            ClientRegistries {
-                client: ClientId::new("foo@example.com".to_owned()),
-                registries: vec![
-                    pattern::Pattern::from_str("foo.example.com").unwrap(),
-                    pattern::Pattern::from_str("*.foo.example.com").unwrap(),
-                ],
-            },
-            ClientRegistries {
-                client: ClientId::new("bar@example.com".to_owned()),
-                registries: vec![pattern::Pattern::from_str("registry.bar.example.com").unwrap()],
-            },
-        ];
-
-        assert_eq!(args.clients, expected);
+        let args =
+            Args::try_parse_from(vec!["oidc-credential-provider", "foo.example.com"]).unwrap();
+        assert_eq!(args.client_id, "foo.example.com")
     }
 }
